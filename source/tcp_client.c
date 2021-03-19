@@ -44,6 +44,7 @@
 #include "cyhal.h"
 #include "cybsp.h"
 #include "cy_retarget_io.h"
+#include "cyabs_rtos.h"
 
 /* FreeRTOS header file. */
 #include <FreeRTOS.h>
@@ -147,29 +148,14 @@
 /*******************************************************************************
 * Function Prototypes
 ********************************************************************************/
-cy_rslt_t create_tcp_client_socket();
-cy_rslt_t tcp_client_recv_handler(cy_socket_t socket_handle, void *arg);
-cy_rslt_t tcp_disconnection_handler(cy_socket_t socket_handle, void *arg);
-cy_rslt_t connect_to_tcp_server(cy_socket_sockaddr_t address);
-void read_uart_input(uint8_t* input_buffer_ptr);
 
-#if(USE_AP_INTERFACE)
-    static cy_rslt_t softap_start(void);
-#else
-    static cy_rslt_t connect_to_wifi_ap(void);
-#endif /* USE_AP_INTERFACE */
+static cy_rslt_t connect_to_wifi_ap(void);
 
 /*******************************************************************************
 * Global Variables
 ********************************************************************************/
 /* TCP client socket handle */
 cy_socket_t client_handle;
-
-/* Binary semaphore handle to keep track of TCP server connection. */
-SemaphoreHandle_t connect_to_server;
-
-/* Holds the IP address obtained for SoftAP using Wi-Fi Connection Manager (WCM). */
-cy_wcm_ip_address_t softap_ip_address;
 
 /*******************************************************************************
  * Function Name: tcp_client_task
@@ -188,18 +174,8 @@ cy_wcm_ip_address_t softap_ip_address;
 void tcp_client_task(void *arg)
 {
     cy_rslt_t result ;
-    uint8_t uart_input[UART_BUFFER_SIZE];
 
-    cy_wcm_config_t wifi_config = { .interface = WIFI_INTERFACE_TYPE };
-
-    /* IP address and TCP port number of the TCP server to which the TCP client
-     * connects to.
-     */
-    cy_socket_sockaddr_t tcp_server_address =
-    {
-        .ip_address.version = CY_SOCKET_IP_VER_V4,
-        .port = TCP_SERVER_PORT
-    };
+    cy_wcm_config_t wifi_config = { .interface = CY_WCM_INTERFACE_TYPE_STA };
 
     /* Initialize Wi-Fi connection manager. */
     result = cy_wcm_init(&wifi_config);
@@ -211,30 +187,13 @@ void tcp_client_task(void *arg)
     }
     printf("Wi-Fi Connection Manager initialized.\r\n");
 
-    #if(USE_AP_INTERFACE)
-
-        /* Start the Wi-Fi device as a Soft AP interface. */
-        result = softap_start();
-        if (result != CY_RSLT_SUCCESS)
-        {
-            printf("Failed to Start Soft AP! Error code: 0x%08"PRIx32"\n", (uint32_t)result);
-            CY_ASSERT(0);
-        }
-    #else
-        /* Connect to Wi-Fi AP */
-        result = connect_to_wifi_ap();
-        if(result!= CY_RSLT_SUCCESS )
-        {
-            printf("\n Failed to connect to Wi-Fi AP! Error code: 0x%08"PRIx32"\n", (uint32_t)result);
-            CY_ASSERT(0);
-        }
-    #endif /* USE_AP_INTERFACE */
-
-    /* Create a binary semaphore to keep track of TCP server connection. */
-    connect_to_server = xSemaphoreCreateBinary();
-
-    /* Give the semaphore so as to connect to TCP server.  */
-    xSemaphoreGive(connect_to_server);
+    /* Connect to Wi-Fi AP */
+    result = connect_to_wifi_ap();
+    if(result!= CY_RSLT_SUCCESS )
+    {
+        printf("\n Failed to connect to Wi-Fi AP! Error code: 0x%08"PRIx32"\n", (uint32_t)result);
+        CY_ASSERT(0);
+    }
 
     /* Initialize secure socket library. */
     result = cy_socket_init();
@@ -248,51 +207,17 @@ void tcp_client_task(void *arg)
 
     for(;;)
     {
-        /* Wait till semaphore is acquired so as to connect to a TCP server. */
-        xSemaphoreTake(connect_to_server, portMAX_DELAY);
+        cy_wcm_wlan_statistics_t stat;
+        memset(&stat, 0, sizeof(stat));
+        result = cy_wcm_get_wlan_statistics(CY_WCM_INTERFACE_TYPE_STA, &stat);
 
-        printf("Connect to TCP server\n");
-        printf("Enter the IPv4 address of the TCP Server:\n");
+        printf("rx_bytes=%lu, tx_bytes=%lu, rx_packets=%lu, tx_packets=%lu, tx_retries=%lu, tx_failed=%lu, tx_bitrate=%lu\r\n",
+               stat.rx_bytes, stat.tx_bytes, stat.rx_packets, stat.tx_packets, stat.tx_retries, stat.tx_failed, stat.tx_bitrate);
 
-        /* Prevent system from entering deep sleep mode
-         * when receiving data from UART.
-         */
-        cyhal_syspm_lock_deepsleep();
-
-        /* Clear the UART input buffer. */
-        memset(uart_input, 0, UART_BUFFER_SIZE);
-
-        /* Read the TCP server's IPv4 address from  the user via the
-         * UART terminal.
-         */
-        read_uart_input(uart_input);
-
-        /* Allow system to enter deep sleep mode. */
-        cyhal_syspm_unlock_deepsleep();
-
-        ip4addr_aton((char *)uart_input,
-                     (ip4_addr_t *)&tcp_server_address.ip_address.ip.v4);
-
-        /* Connect to the TCP server. If the connection fails, retry
-         * to connect to the server for MAX_TCP_SERVER_CONN_RETRIES times.
-         */
-        printf("Connecting to TCP Server (IP Address: %s, Port: %d)\n\n",
-                      ip4addr_ntoa((const ip4_addr_t *)&tcp_server_address.ip_address.ip.v4),
-                      TCP_SERVER_PORT);
-
-        result = connect_to_tcp_server(tcp_server_address);
-
-        if(result != CY_RSLT_SUCCESS)
-        {
-            printf("Failed to connect to TCP server.\n");
-            
-            /* Give the semaphore so as to connect to TCP server.  */
-            xSemaphoreGive(connect_to_server);
-        }
+        cy_rtos_delay_milliseconds(3000);
     }
  }
 
-#if(!USE_AP_INTERFACE)
 /*******************************************************************************
  * Function Name: connect_to_wifi_ap()
  *******************************************************************************
@@ -343,362 +268,4 @@ cy_rslt_t connect_to_wifi_ap(void)
 
     return result;
 }
-#endif /* USE_AP_INTERFACE */
-
-#if(USE_AP_INTERFACE)
-/********************************************************************************
- * Function Name: softap_start
- ********************************************************************************
- * Summary:
- *  This function configures device in AP mode and initializes
- *  a SoftAP with the given credentials (SOFTAP_SSID, SOFTAP_PASSWORD and
- *  SOFTAP_SECURITY_TYPE).
- *
- * Parameters:
- *  void
- *
- * Return:
- *  cy_rslt_t: Returns CY_RSLT_SUCCESS if the Soft AP is started successfully,
- *  a WCM error code otherwise.
- *
- *******************************************************************************/
-static cy_rslt_t softap_start(void)
-{
-    cy_rslt_t result = CY_RSLT_SUCCESS;
-
-    /* Initialize the Wi-Fi device as a Soft AP. */
-    cy_wcm_ap_credentials_t softap_credentials = {SOFTAP_SSID, SOFTAP_PASSWORD,
-                                                  SOFTAP_SECURITY_TYPE};
-    cy_wcm_ip_setting_t softap_ip_info = {
-        .ip_address = {.version = CY_WCM_IP_VER_V4, .ip.v4 = SOFTAP_IP_ADDRESS},
-        .gateway = {.version = CY_WCM_IP_VER_V4, .ip.v4 = SOFTAP_GATEWAY},
-        .netmask = {.version = CY_WCM_IP_VER_V4, .ip.v4 = SOFTAP_NETMASK}};
-
-    cy_wcm_ap_config_t softap_config = {softap_credentials, SOFTAP_RADIO_CHANNEL,
-                                        softap_ip_info,
-                                        NULL};
-
-    /* Start the the Wi-Fi device as a Soft AP. */
-    result = cy_wcm_start_ap(&softap_config);
-
-    if(result == CY_RSLT_SUCCESS)
-    {
-        printf("Wi-Fi Device configured as Soft AP\n");
-        printf("Connect TCP client device to the network: SSID: %s Password:%s\n",
-                SOFTAP_SSID, SOFTAP_PASSWORD);
-        printf("SofAP IP Address : %s\n\n",
-                ip4addr_ntoa((const ip4_addr_t *)&softap_ip_info.ip_address.ip.v4));
-    }
-
-    return result;
-}
-#endif /* USE_AP_INTERFACE */
-
-/*******************************************************************************
- * Function Name: create_tcp_client_socket
- *******************************************************************************
- * Summary:
- *  Function to create a socket and set the socket options
- *  to set call back function for handling incoming messages, call back
- *  function to handle disconnection.
- *
- *******************************************************************************/
-cy_rslt_t create_tcp_client_socket()
-{
-    cy_rslt_t result;
-
-    /* TCP keep alive parameters. */
-    int keep_alive = 1;
-    uint32_t keep_alive_interval = TCP_KEEP_ALIVE_INTERVAL_MS;
-    uint32_t keep_alive_count    = TCP_KEEP_ALIVE_RETRY_COUNT;
-    uint32_t keep_alive_idle_time = TCP_KEEP_ALIVE_IDLE_TIME_MS;
-
-    /* Variables used to set socket options. */
-    cy_socket_opt_callback_t tcp_recv_option;
-    cy_socket_opt_callback_t tcp_disconnect_option;
-
-    /* Create a new secure TCP socket. */
-    result = cy_socket_create(CY_SOCKET_DOMAIN_AF_INET, CY_SOCKET_TYPE_STREAM,
-                              CY_SOCKET_IPPROTO_TCP, &client_handle);
-
-    if (result != CY_RSLT_SUCCESS)
-    {
-        printf("Failed to create socket!\n");
-        return result;
-    }
-
-    /* Register the callback function to handle messages received from TCP server. */
-    tcp_recv_option.callback = tcp_client_recv_handler;
-    tcp_recv_option.arg = NULL;
-    result = cy_socket_setsockopt(client_handle, CY_SOCKET_SOL_SOCKET,
-                                  CY_SOCKET_SO_RECEIVE_CALLBACK,
-                                  &tcp_recv_option, sizeof(cy_socket_opt_callback_t));
-    if (result != CY_RSLT_SUCCESS)
-    {
-        printf("Set socket option: CY_SOCKET_SO_RECEIVE_CALLBACK failed\n");
-        return result;
-    }
-
-    /* Register the callback function to handle disconnection. */
-    tcp_disconnect_option.callback = tcp_disconnection_handler;
-    tcp_disconnect_option.arg = NULL;
-
-    result = cy_socket_setsockopt(client_handle, CY_SOCKET_SOL_SOCKET,
-                                  CY_SOCKET_SO_DISCONNECT_CALLBACK,
-                                  &tcp_disconnect_option, sizeof(cy_socket_opt_callback_t));
-    if(result != CY_RSLT_SUCCESS)
-    {
-        printf("Set socket option: CY_SOCKET_SO_DISCONNECT_CALLBACK failed\n");
-    }
-
-
-    /* Set the TCP keep alive interval. */
-    result = cy_socket_setsockopt(client_handle, CY_SOCKET_SOL_TCP,
-                                  CY_SOCKET_SO_TCP_KEEPALIVE_INTERVAL,
-                                  &keep_alive_interval, sizeof(keep_alive_interval));
-    if(result != CY_RSLT_SUCCESS)
-    {
-        printf("Set socket option: CY_SOCKET_SO_TCP_KEEPALIVE_INTERVAL failed\n");
-        return result;
-    }
-
-    /* Set the retry count for TCP keep alive packet. */
-    result = cy_socket_setsockopt(client_handle, CY_SOCKET_SOL_TCP,
-                                  CY_SOCKET_SO_TCP_KEEPALIVE_COUNT,
-                                  &keep_alive_count, sizeof(keep_alive_count));
-    if(result != CY_RSLT_SUCCESS)
-    {
-        printf("Set socket option: CY_SOCKET_SO_TCP_KEEPALIVE_COUNT failed\n");
-        return result;
-    }
-
-    /* Set the network idle time before sending the TCP keep alive packet. */
-    result = cy_socket_setsockopt(client_handle, CY_SOCKET_SOL_TCP,
-                                  CY_SOCKET_SO_TCP_KEEPALIVE_IDLE_TIME,
-                                  &keep_alive_idle_time, sizeof(keep_alive_idle_time));
-    if(result != CY_RSLT_SUCCESS)
-    {
-        printf("Set socket option: CY_SOCKET_SO_TCP_KEEPALIVE_IDLE_TIME failed\n");
-        return result;
-    }
-
-    /* Enable TCP keep alive. */
-    result = cy_socket_setsockopt(client_handle, CY_SOCKET_SOL_SOCKET,
-                                      CY_SOCKET_SO_TCP_KEEPALIVE_ENABLE,
-                                          &keep_alive, sizeof(keep_alive));
-    if(result != CY_RSLT_SUCCESS)
-    {
-        printf("Set socket option: CY_SOCKET_SO_TCP_KEEPALIVE_ENABLE failed\n");
-        return result;
-    }
-
-    return result;
-}
-
-/*******************************************************************************
- * Function Name: connect_to_tcp_server
- *******************************************************************************
- * Summary:
- *  Function to connect to TCP server.
- *
- * Parameters:
- *  cy_socket_sockaddr_t address: Address of TCP server socket
- *
- * Return:
- *  cy_result result: Result of the operation
- *
- *******************************************************************************/
-cy_rslt_t connect_to_tcp_server(cy_socket_sockaddr_t address)
-{
-    cy_rslt_t result = CY_RSLT_MODULE_SECURE_SOCKETS_TIMEOUT;
-    cy_rslt_t conn_result;
-
-    for(uint32_t conn_retries = 0; conn_retries < MAX_TCP_SERVER_CONN_RETRIES; conn_retries++)
-    {
-        /* Create a TCP socket */
-        conn_result = create_tcp_client_socket();
-        
-        if(conn_result != CY_RSLT_SUCCESS)
-        {
-            printf("Socket creation failed!\n");
-            CY_ASSERT(0);
-        }
-
-        conn_result = cy_socket_connect(client_handle, &address, sizeof(cy_socket_sockaddr_t));
-        
-        if (conn_result == CY_RSLT_SUCCESS)
-        {
-            printf("============================================================\n");
-            printf("Connected to TCP server\n");
-
-            return conn_result;
-        }
-
-        printf("Could not connect to TCP server. Error code: 0x%08"PRIx32"\n", (uint32_t)result);
-        printf("Trying to reconnect to TCP server... Please check if the server is listening\n");
-
-        /* The resources allocated during the socket creation (cy_socket_create)
-         * should be deleted.
-         */
-        cy_socket_delete(client_handle);
-    }
-
-     /* Stop retrying after maximum retry attempts. */
-     printf("Exceeded maximum connection attempts to the TCP server\n");
-
-     return result;
-}
-
-/*******************************************************************************
- * Function Name: tcp_client_recv_handler
- *******************************************************************************
- * Summary:
- *  Callback function to handle incoming TCP server messages.
- *
- * Parameters:
- *  cy_socket_t socket_handle: Connection handle for the TCP client socket
- *  void *args : Parameter passed on to the function (unused)
- *
- * Return:
- *  cy_result result: Result of the operation
- *
- *******************************************************************************/
-cy_rslt_t tcp_client_recv_handler(cy_socket_t socket_handle, void *arg)
-{
-    /* Variable to store number of bytes send to the TCP server. */
-    uint32_t bytes_sent = 0;
-
-    /* Variable to store number of bytes received. */
-    uint32_t bytes_received = 0;
-
-    char message_buffer[MAX_TCP_DATA_PACKET_LENGTH];
-    cy_rslt_t result ;
-
-    printf("============================================================\n");
-    result = cy_socket_recv(socket_handle, message_buffer, TCP_LED_CMD_LEN,
-                            CY_SOCKET_FLAGS_NONE, &bytes_received);
-
-    if(message_buffer[0] == LED_ON_CMD)
-    {
-        /* Turn the LED ON. */
-        cyhal_gpio_write(CYBSP_USER_LED, CYBSP_LED_STATE_ON);
-        printf("LED turned ON\n");
-        sprintf(message_buffer, ACK_LED_ON);
-    }
-    else if(message_buffer[0] == LED_OFF_CMD)
-    {
-        /* Turn the LED OFF. */
-        cyhal_gpio_write(CYBSP_USER_LED, CYBSP_LED_STATE_OFF);
-        printf("LED turned OFF\n");
-        sprintf(message_buffer, ACK_LED_OFF);
-    }
-    else
-    {
-        printf("Invalid command\n");
-        sprintf(message_buffer, MSG_INVALID_CMD);
-    }
-
-    /* Send acknowledgement to the TCP server in receipt of the message received. */
-    result = cy_socket_send(socket_handle, message_buffer, strlen(message_buffer),
-                            CY_SOCKET_FLAGS_NONE, &bytes_sent);
-    if(result == CY_RSLT_SUCCESS)
-    {
-        printf("Acknowledgement sent to TCP server\n");
-    }
-
-    return result;
-}
-
-/*******************************************************************************
- * Function Name: tcp_disconnection_handler
- *******************************************************************************
- * Summary:
- *  Callback function to handle TCP socket disconnection event.
- *
- * Parameters:
- *  cy_socket_t socket_handle: Connection handle for the TCP client socket
- *  void *args : Parameter passed on to the function (unused)
- *
- * Return:
- *  cy_result result: Result of the operation
- *
- *******************************************************************************/
-cy_rslt_t tcp_disconnection_handler(cy_socket_t socket_handle, void *arg)
-{
-    cy_rslt_t result;
-
-    /* Disconnect the TCP client. */
-    result = cy_socket_disconnect(socket_handle, 0);
-
-    /* Free the resources allocated to the socket. */
-    cy_socket_delete(socket_handle);
-
-    printf("Disconnected from the TCP server! \n");
-
-    /* Give the semaphore so as to connect to TCP server. */
-    xSemaphoreGive(connect_to_server);
-
-    return result;
-}
-
-/*******************************************************************************
- * Function Name: read_uart_input
- *******************************************************************************
- * Summary:
- *  Function to read user input from UART terminal.
- *
- * Parameters:
- *  uint8_t* input_buffer_ptr: Pointer to input buffer
- *
- * Return:
- *  None
- *
- *******************************************************************************/
-void read_uart_input(uint8_t* input_buffer_ptr)
-{
-    cy_rslt_t result = CY_RSLT_SUCCESS;    
-    uint8_t *ptr = input_buffer_ptr; 
-    uint32_t numBytes;
-
-    do
-    {
-        /* Check for data in the UART buffer with zero timeout. */
-        numBytes = cyhal_uart_readable(&cy_retarget_io_uart_obj);
-
-        if(numBytes > 0)
-        {
-            result = cyhal_uart_getc(&cy_retarget_io_uart_obj, ptr,
-                            UART_INPUT_TIMEOUT_MS);
-
-            if(result == CY_RSLT_SUCCESS)
-            {
-                if((*ptr == '\r') || (*ptr == '\n'))
-                {
-                    printf("\n");
-                }
-                else
-                {
-                    /* Echo the received character */
-                    cyhal_uart_putc(&cy_retarget_io_uart_obj, *ptr);
-
-                    if (*ptr != '\b')
-                    {
-                        ptr++;
-                    }
-                    else if(ptr != input_buffer_ptr)
-                    {
-                        ptr--;
-                    }
-                }
-            }
-        }
-
-        vTaskDelay(RTOS_TICK_TO_WAIT);
-
-    } while((*ptr != '\r') && (*ptr != '\n'));
-
-    /* Terminate string with NULL character. */
-    *ptr = '\0';
-}
-
 /* [] END OF FILE */
