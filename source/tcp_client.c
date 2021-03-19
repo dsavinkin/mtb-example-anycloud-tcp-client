@@ -72,78 +72,23 @@
 /*******************************************************************************
 * Macros
 ********************************************************************************/
-/* To use the Wi-Fi device in AP interface mode, set this macro as '1' */
-#define USE_AP_INTERFACE                         (0)
+/* Wi-Fi Credentials: Modify WIFI_SSID, WIFI_PASSWORD, and WIFI_SECURITY_TYPE
+ * to match your Wi-Fi network credentials.
+ * Note: Maximum length of the Wi-Fi SSID and password is set to
+ * CY_WCM_MAX_SSID_LEN and CY_WCM_MAX_PASSPHRASE_LEN as defined in cy_wcm.h file.
+ */
+#define WIFI_SSID                             "MY_WIFI_SSID"
+#define WIFI_PASSWORD                         "MY_WIFI_PASSWORD"
 
-#define MAKE_IP_PARAMETERS(a, b, c, d)           ((((uint32_t) d) << 24) | \
-                                                 (((uint32_t) c) << 16) | \
-                                                 (((uint32_t) b) << 8) |\
-                                                 ((uint32_t) a))
+/* Security type of the Wi-Fi access point. See 'cy_wcm_security_t' structure
+ * in "cy_wcm.h" for more details.
+ */
+#define WIFI_SECURITY_TYPE                    CY_WCM_SECURITY_WPA2_AES_PSK
+/* Maximum number of connection retries to a Wi-Fi network. */
+#define MAX_WIFI_CONN_RETRIES                 (10u)
 
-#if(USE_AP_INTERFACE)
-    #define WIFI_INTERFACE_TYPE                  CY_WCM_INTERFACE_TYPE_AP
-
-    /* SoftAP Credentials: Modify SOFTAP_SSID and SOFTAP_PASSWORD as required */
-    #define SOFTAP_SSID                          "MY_SOFT_AP"
-    #define SOFTAP_PASSWORD                      "psoc1234"
-
-    /* Security type of the SoftAP. See 'cy_wcm_security_t' structure
-     * in "cy_wcm.h" for more details.
-     */
-    #define SOFTAP_SECURITY_TYPE                  CY_WCM_SECURITY_WPA2_AES_PSK
-
-    #define SOFTAP_IP_ADDRESS_COUNT               (2u)
-
-    #define SOFTAP_IP_ADDRESS                     MAKE_IP_PARAMETERS(192, 168, 10, 1)
-    #define SOFTAP_NETMASK                        MAKE_IP_PARAMETERS(255, 255, 255, 0)
-    #define SOFTAP_GATEWAY                        MAKE_IP_PARAMETERS(192, 168, 10, 1)
-    #define SOFTAP_RADIO_CHANNEL                  (1u)
-#else
-    #define WIFI_INTERFACE_TYPE                   CY_WCM_INTERFACE_TYPE_STA
-
-    /* Wi-Fi Credentials: Modify WIFI_SSID, WIFI_PASSWORD, and WIFI_SECURITY_TYPE
-     * to match your Wi-Fi network credentials.
-     * Note: Maximum length of the Wi-Fi SSID and password is set to
-     * CY_WCM_MAX_SSID_LEN and CY_WCM_MAX_PASSPHRASE_LEN as defined in cy_wcm.h file.
-     */
-    #define WIFI_SSID                             "MY_WIFI_SSID"
-    #define WIFI_PASSWORD                         "MY_WIFI_PASSWORD"
-
-    /* Security type of the Wi-Fi access point. See 'cy_wcm_security_t' structure
-     * in "cy_wcm.h" for more details.
-     */
-    #define WIFI_SECURITY_TYPE                    CY_WCM_SECURITY_WPA2_AES_PSK
-    /* Maximum number of connection retries to a Wi-Fi network. */
-    #define MAX_WIFI_CONN_RETRIES                 (10u)
-
-    /* Wi-Fi re-connection time interval in milliseconds */
-    #define WIFI_CONN_RETRY_INTERVAL_MSEC         (1000u)
-#endif /* USE_AP_INTERFACE */
-
-/* Maximum number of connection retries to the TCP server. */
-#define MAX_TCP_SERVER_CONN_RETRIES               (5u)
-
-/* Length of the TCP data packet. */
-#define MAX_TCP_DATA_PACKET_LENGTH                (20u)
-
-/* TCP keep alive related macros. */
-#define TCP_KEEP_ALIVE_IDLE_TIME_MS               (10000u)
-#define TCP_KEEP_ALIVE_INTERVAL_MS                (1000u)
-#define TCP_KEEP_ALIVE_RETRY_COUNT                (2u)
-
-/* Length of the LED ON/OFF command issued from the TCP server. */
-#define TCP_LED_CMD_LEN                           (1u)
-#define LED_ON_CMD                                '1'
-#define LED_OFF_CMD                               '0'
-#define ACK_LED_ON                                "LED ON ACK"
-#define ACK_LED_OFF                               "LED OFF ACK"
-#define MSG_INVALID_CMD                           "Invalid command"
-
-#define TCP_SERVER_PORT                           (50007u)
-#define ASCII_BACKSPACE                           (0x08)
-#define RTOS_TICK_TO_WAIT                         (50u)
-#define UART_INPUT_TIMEOUT_MS                     (1u)
-#define UART_BUFFER_SIZE                          (50u)
+/* Wi-Fi re-connection time interval in milliseconds */
+#define WIFI_CONN_RETRY_INTERVAL_MSEC         (1000u)
 
 /*******************************************************************************
 * Function Prototypes
@@ -154,8 +99,6 @@ static cy_rslt_t connect_to_wifi_ap(void);
 /*******************************************************************************
 * Global Variables
 ********************************************************************************/
-/* TCP client socket handle */
-cy_socket_t client_handle;
 
 /*******************************************************************************
  * Function Name: tcp_client_task
@@ -194,16 +137,6 @@ void tcp_client_task(void *arg)
         printf("\n Failed to connect to Wi-Fi AP! Error code: 0x%08"PRIx32"\n", (uint32_t)result);
         CY_ASSERT(0);
     }
-
-    /* Initialize secure socket library. */
-    result = cy_socket_init();
-
-    if (result != CY_RSLT_SUCCESS)
-    {
-        printf("Secure Socket initialization failed!\n");
-        CY_ASSERT(0);
-    }
-    printf("Secure Socket initialized\n");
 
     for(;;)
     {
