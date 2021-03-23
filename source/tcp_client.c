@@ -172,6 +172,15 @@ cy_rslt_t connect_to_wifi_ap(void)
     memset(&wifi_conn_param, 0, sizeof(cy_wcm_connect_params_t));
     memcpy(wifi_conn_param.ap_credentials.SSID, WIFI_SSID, sizeof(WIFI_SSID));
     memcpy(wifi_conn_param.ap_credentials.password, WIFI_PASSWORD, sizeof(WIFI_PASSWORD));
+
+    //MAC 1c:3b:f3:a3:2c:6b
+    wifi_conn_param.BSSID[0] = 0x1c;
+    wifi_conn_param.BSSID[1] = 0x2b;
+    wifi_conn_param.BSSID[2] = 0xf3;
+    wifi_conn_param.BSSID[3] = 0xa3;
+    wifi_conn_param.BSSID[4] = 0x2c;
+    wifi_conn_param.BSSID[5] = 0x6b;
+
     wifi_conn_param.ap_credentials.security = WIFI_SECURITY_TYPE;
 
     printf("Connecting to Wi-Fi Network: %s\n", WIFI_SSID);
