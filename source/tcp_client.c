@@ -63,6 +63,7 @@
 
 /* TCP client task header file. */
 #include "tcp_client.h"
+#include "scan_task.h"
 
 #include "cy_lwip.h"
 
@@ -95,10 +96,17 @@
 ********************************************************************************/
 
 static cy_rslt_t connect_to_wifi_ap(void);
+static void scan_callback( cy_wcm_scan_result_t *result_ptr, void *user_data, cy_wcm_scan_status_t status );
+static void print_scan_result(cy_wcm_scan_result_t *result);
 
 /*******************************************************************************
 * Global Variables
 ********************************************************************************/
+
+uint32_t num_scan_result;
+bool scan_completed = false;
+
+cy_wcm_mac_t AP_BSSID;
 
 /*******************************************************************************
  * Function Name: tcp_client_task
@@ -129,6 +137,13 @@ void tcp_client_task(void *arg)
         CY_ASSERT(0);
     }
     printf("Wi-Fi Connection Manager initialized.\r\n");
+
+    printf("Start scan: %s\n", WIFI_SSID);
+    cy_wcm_start_scan(scan_callback, NULL, NULL);
+    while (!scan_completed)
+    {
+        cy_rtos_delay_milliseconds(3000);
+    }
 
     /* Connect to Wi-Fi AP */
     result = connect_to_wifi_ap();
@@ -173,17 +188,23 @@ cy_rslt_t connect_to_wifi_ap(void)
     memcpy(wifi_conn_param.ap_credentials.SSID, WIFI_SSID, sizeof(WIFI_SSID));
     memcpy(wifi_conn_param.ap_credentials.password, WIFI_PASSWORD, sizeof(WIFI_PASSWORD));
 
+#if 0
     //MAC 1c:3b:f3:a3:2c:6b
     wifi_conn_param.BSSID[0] = 0x1c;
-    wifi_conn_param.BSSID[1] = 0x2b;
+    wifi_conn_param.BSSID[1] = 0x3b;
     wifi_conn_param.BSSID[2] = 0xf3;
     wifi_conn_param.BSSID[3] = 0xa3;
     wifi_conn_param.BSSID[4] = 0x2c;
     wifi_conn_param.BSSID[5] = 0x6b;
+#elif 1
+    memcpy(wifi_conn_param.BSSID, AP_BSSID, 6);
+#endif
 
     wifi_conn_param.ap_credentials.security = WIFI_SECURITY_TYPE;
 
-    printf("Connecting to Wi-Fi Network: %s\n", WIFI_SSID);
+    printf("\nConnecting to %s with MAC address %02X:%02X:%02X:%02X:%02X:%02X\n\n",WIFI_SSID,
+           wifi_conn_param.BSSID[0],wifi_conn_param.BSSID[1],wifi_conn_param.BSSID[2],
+           wifi_conn_param.BSSID[3],wifi_conn_param.BSSID[4],wifi_conn_param.BSSID[5]);
 
     /* Join the Wi-Fi AP. */
     for(uint32_t conn_retries = 0; conn_retries < MAX_WIFI_CONN_RETRIES; conn_retries++ )
@@ -210,4 +231,123 @@ cy_rslt_t connect_to_wifi_ap(void)
 
     return result;
 }
+
+/*
+ * Function Name: scan_callback
+ *******************************************************************************
+ * Summary: The callback function which accumulates the scan results. After
+ * completing the scan, it sends a task notification to scan_task.
+ *
+ * Parameters:
+ *   cy_wcm_scan_result_t *result_ptr: Pointer to the scan result
+ *   void *user_data: User data.
+ *   cy_wcm_scan_status_t status: Status of scan completion.
+ *
+ * Return:
+ *  void
+ *
+ ******************************************************************************/
+static void scan_callback(cy_wcm_scan_result_t *result_ptr, void *user_data, cy_wcm_scan_status_t status)
+{
+    if ((strlen((const char *)result_ptr->SSID) != 0) && (status == CY_WCM_SCAN_INCOMPLETE))
+    {
+        num_scan_result++;
+        print_scan_result(result_ptr);
+
+        if (strcmp((char*)result_ptr->SSID, WIFI_SSID) == 0)
+        {
+            printf("*** Found target SSID, save BSSID\n");
+            memcpy(AP_BSSID, result_ptr->BSSID, 6);
+        }
+    }
+
+    if ( (CY_WCM_SCAN_COMPLETE == status) )
+    {
+        /* Reset the number of scan results to 0 for the next scan.*/
+        num_scan_result = 0;
+        scan_completed = true;
+    }
+}
+
+
+/*******************************************************************************
+ * Function Name: print_scan_result
+ *******************************************************************************
+ * Summary: This function prints the scan result accumulated by the scan
+ * handler.
+ *
+ *
+ * Parameters:
+ *  cy_wcm_scan_result_t *result: Pointer to the scan result.
+ *
+ * Return:
+ *  void
+ *
+ ******************************************************************************/
+static void print_scan_result(cy_wcm_scan_result_t *result)
+{
+    char* security_type_string;
+
+    /* Convert the security type of the scan result to the corresponding
+     * security string
+     */
+    switch (result->security)
+    {
+        case CY_WCM_SECURITY_OPEN:
+            security_type_string = SECURITY_OPEN;
+            break;
+        case CY_WCM_SECURITY_WEP_PSK:
+            security_type_string = SECURITY_WEP_PSK;
+            break;
+        case CY_WCM_SECURITY_WEP_SHARED:
+            security_type_string = SECURITY_WEP_SHARED;
+            break;
+        case CY_WCM_SECURITY_WPA_TKIP_PSK:
+            security_type_string = SECURITY_WEP_TKIP_PSK;
+            break;
+        case CY_WCM_SECURITY_WPA_AES_PSK:
+            security_type_string = SECURITY_WPA_AES_PSK;
+            break;
+        case CY_WCM_SECURITY_WPA_MIXED_PSK:
+            security_type_string = SECURITY_WPA_MIXED_PSK;
+            break;
+        case CY_WCM_SECURITY_WPA2_AES_PSK:
+            security_type_string = SECURITY_WPA2_AES_PSK;
+            break;
+        case CY_WCM_SECURITY_WPA2_TKIP_PSK:
+            security_type_string = SECURITY_WPA2_TKIP_PSK;
+            break;
+        case CY_WCM_SECURITY_WPA2_MIXED_PSK:
+            security_type_string = SECURITY_WPA2_MIXED_PSK;
+            break;
+        case CY_WCM_SECURITY_WPA2_FBT_PSK:
+            security_type_string = SECURITY_WPA2_FBT_PSK;
+            break;
+        case CY_WCM_SECURITY_WPA3_SAE:
+            security_type_string = SECURITY_WPA3_SAE;
+            break;
+        case CY_WCM_SECURITY_WPA3_WPA2_PSK:
+            security_type_string = SECURITY_WPA3_WPA2_PSK;
+            break;
+        case CY_WCM_SECURITY_IBSS_OPEN:
+            security_type_string = SECURITY_IBSS_OPEN;
+            break;
+        case CY_WCM_SECURITY_WPS_SECURE:
+            security_type_string = SECURITY_WPS_SECURE;
+            break;
+        case CY_WCM_SECURITY_UNKNOWN:
+            security_type_string = SECURITY_UNKNOWN;
+            break;
+        default:
+            security_type_string = SECURITY_UNKNOWN;
+            break;
+    }
+
+    printf(" %2ld   %-32s     %4d     %2d      %2X:%2X:%2X:%2X:%2X:%2X         %-15s\n",
+           num_scan_result, result->SSID,
+           result->signal_strength, result->channel, result->BSSID[0], result->BSSID[1],
+           result->BSSID[2], result->BSSID[3], result->BSSID[4], result->BSSID[5],
+           security_type_string);
+}
+
 /* [] END OF FILE */
